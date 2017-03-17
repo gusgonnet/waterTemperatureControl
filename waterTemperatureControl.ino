@@ -117,7 +117,7 @@ double temperatureTarget = 30.0;
 double temperatureCalibration = 0;
 
 //you can change this to your liking
-double temperatureMargin = 0.25;
+double temperatureMargin = 2; //0.25
 
 // Celsius is the default unit, set this boolean to true if you want to use Fahrenheit
 const bool useFahrenheit = false;
@@ -246,7 +246,7 @@ int setTarget(String parameter)
   if ((localValue >= 10) && (localValue <= 70))
   {
     temperatureTarget = localValue;
-    Particle.publish(APP_NAME, "Setting temperature target to " + double2string(temperatureTarget), PRIVATE);
+    // Particle.publish(APP_NAME, "Setting temperature target to " + double2string(temperatureTarget), PRIVATE);
     saveSettingsInEeprom();
     return 0;
   }
@@ -315,7 +315,7 @@ void readTemperature()
 
   getTemp();
 
-  Particle.publish(APP_NAME, "Temperature: " + double2string(temperatureCurrent), PRIVATE);
+  // Particle.publish(APP_NAME, "Temperature: " + double2string(temperatureCurrent), PRIVATE);
 }
 
 /*******************************************************************************
@@ -665,7 +665,7 @@ void readFromEeprom()
     temperatureTarget = myObj.temperatureTarget;
     temperatureCalibration = myObj.temperatureCalibration;
 
-    Particle.publish(APP_NAME, "Read settings from EEPROM");
+    // Particle.publish(APP_NAME, "Read settings from EEPROM");
   }
 }
 
@@ -685,5 +685,5 @@ void saveSettingsInEeprom()
   //then save
   EEPROM.put(EEPROM_ADDRESS, eepromMemory);
 
-  Particle.publish(APP_NAME, "Stored settings on EEPROM");
+  // Particle.publish(APP_NAME, "Stored settings on EEPROM");
 }
