@@ -31,19 +31,21 @@
 #include "Particle-OneWire.h"
 #include "DS18B20.h"
 #include "NCD4Relay.h"
-
-#include "application.h"
+#include "PietteTech_DHT.h"
 #include "elapsedMillis.h"
 #include "FiniteStateMachine.h"
 
 #define APP_NAME "waterTemperatureControl"
-String VERSION = "Version 0.01";
+String VERSION = "Version 0.02";
 
 SYSTEM_MODE(AUTOMATIC);
 
 /*******************************************************************************
  * changes in version 0.01:
        * Initial version
+ * changes in version 0.02:
+       * adding second ds18b20 sensor for sensing ambient temperature on D4
+       * adding DHT22 sensor for sensing ambient temperature and humidity on D5
  *******************************************************************************/
 
 // Argentina time zone GMT-3
@@ -123,6 +125,27 @@ double temperatureMargin = 2; //0.25
 const bool useFahrenheit = false;
 
 /*******************************************************************************
+ temperature sensor and variables for ambient sensing
+*******************************************************************************/
+//Sets Pin D4 for Ambient Temp Sensor
+DS18B20 ds18b20_3 = DS18B20(D4);
+double temperatureCurrent3 = INVALID;
+
+/*******************************************************************************
+ DHT sensor for ambient sensing
+*******************************************************************************/
+#define DHTTYPE  DHT22                // Sensor type DHT11/21/22/AM2301/AM2302
+#define DHTPIN   5                    // Digital pin for communications
+void dht_wrapper(); // must be declared before the lib initialization
+PietteTech_DHT DHT(DHTPIN, DHTTYPE, dht_wrapper);
+bool bDHTstarted;       // flag to indicate we started acquisition
+double temperatureCurrent4 = INVALID;
+double humidityCurrent4 = INVALID;
+// This wrapper is in charge of calling the DHT sensor lib
+void dht_wrapper() { DHT.isrCallback(); }
+
+
+/*******************************************************************************
  relay variables
 *******************************************************************************/
 NCD4Relay relayController;
@@ -176,6 +199,14 @@ void setup()
   // Up to 15 cloud functions may be registered and each function name is limited to a maximum of 12 characters.
   Particle.function("setTarget", setTarget);
   Particle.function("setCalbrtion", setCalibration);
+
+  /*******************************************************************************
+   cloud variables and functions for the ambient temperature
+  *******************************************************************************/
+  Particle.variable("tempAmbient", temperatureCurrent3);
+
+  Particle.variable("tempAmbieDHT", temperatureCurrent4);
+  Particle.variable("humiAmbieDHT", humidityCurrent4);
 
   Time.zone(TIME_ZONE);
 
@@ -314,8 +345,14 @@ void readTemperature()
   temperatureSampleInterval = 0;
 
   getTemp();
+  getTempAmb();
+  getTempAmbDHT();
 
-  // Particle.publish(APP_NAME, "Temperature: " + double2string(temperatureCurrent), PRIVATE);
+  Particle.publish(APP_NAME, "TAmb: " + double2string(temperatureCurrent3) \
+    + ", TAmbDHT: " + double2string(temperatureCurrent4) \
+    + ", HAmbDHT: " + double2string(humidityCurrent4) \
+    , PRIVATE);
+
 }
 
 /*******************************************************************************
@@ -361,6 +398,89 @@ void getTemp()
     }
   }
 }
+
+/*******************************************************************************
+ * Function Name  : getTempAmb
+ * Description    : reads the third DS18B20 sensor (ambient)
+ * Return         : nothing
+ *******************************************************************************/
+void getTempAmb()
+{
+
+  int dsAttempts = 0;
+  double temperatureLocal = INVALID;
+
+  if (!ds18b20_3.search())
+  {
+    ds18b20_3.resetsearch();
+    temperatureLocal = ds18b20_3.getTemperature();
+    while (!ds18b20_3.crcCheck() && dsAttempts < 4)
+    {
+      dsAttempts++;
+      if (dsAttempts == 3)
+      {
+        delay(1000);
+      }
+      ds18b20_3.resetsearch();
+      temperatureLocal = ds18b20_3.getTemperature();
+      continue;
+    }
+    dsAttempts = 0;
+
+    if (useFahrenheit)
+    {
+      temperatureLocal = ds18b20_3.convertToFahrenheit(temperatureLocal);
+    }
+
+    // if reading is valid, take it
+    if ((temperatureLocal != INVALID) && (ds18b20_3.crcCheck()))
+    {
+      temperatureCurrent3 = temperatureLocal;
+    }
+  }
+}
+
+/*******************************************************************************
+ * Function Name  : getTempAmbDHT
+ * Description    : reads the temperature of the DHT22 sensor
+ * Return         : none
+ *******************************************************************************/
+void getTempAmbDHT() {
+
+  // start the sample
+  if (!bDHTstarted) {
+    DHT.acquireAndWait(5);
+    bDHTstarted = true;
+  }
+
+  //still acquiring sample? go away and come back later
+  if (DHT.acquiring()) {
+    return;
+  }
+
+  //I observed my dht22 measuring below 0 from time to time, so let's discard that sample
+  if ( DHT.getCelsius() < 0 ) {
+    //reset the sample flag so we can take another
+    bDHTstarted = false;
+    return;
+  }
+
+    if (useFahrenheit)
+    {
+      temperatureCurrent4 = DHT.getFahrenheit();
+    }
+    else
+    {
+      temperatureCurrent4 = DHT.getCelsius();
+    }
+
+  humidityCurrent4 = DHT.getHumidity();
+
+  //reset the sample flag so we can take another
+  bDHTstarted = false;
+
+}
+
 
 /*******************************************************************************
 ********************************************************************************
