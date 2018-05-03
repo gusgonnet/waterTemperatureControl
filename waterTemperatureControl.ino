@@ -44,6 +44,7 @@ SYSTEM_MODE(AUTOMATIC);
  * changes in version 0.01:
        * Initial version
  * changes in version 0.02:
+       * particle share link: https://go.particle.io/shared_apps/5aea7c1e5ae4df19f3000d87
        * adding second ds18b20 sensor for sensing ambient temperature on D4
        * adding DHT22 sensor for sensing ambient temperature and humidity on D5
  *******************************************************************************/
