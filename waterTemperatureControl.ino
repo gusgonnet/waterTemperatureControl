@@ -36,7 +36,7 @@
 #include "FiniteStateMachine.h"
 
 #define APP_NAME "waterTemperatureControl"
-String VERSION = "Version 0.02";
+String VERSION = "Version 0.03";
 
 SYSTEM_MODE(AUTOMATIC);
 
@@ -44,9 +44,13 @@ SYSTEM_MODE(AUTOMATIC);
  * changes in version 0.01:
        * Initial version
  * changes in version 0.02:
-       * particle share link: https://go.particle.io/shared_apps/5aea7c1e5ae4df19f3000d87
+       * particle share link: https://go.particle.io/shared_apps/5aea7c1e5ae4df19f3000d87 (with particle build libraries for ds18)
+       * particle share link: https://go.particle.io/shared_apps/5afce71c04e41960b7000816 (with library for ds18: https://github.com/LukeUSMC/ds18b20-photon)
        * adding second ds18b20 sensor for sensing ambient temperature on D4
        * adding DHT22 sensor for sensing ambient temperature and humidity on D5
+ * changes in version 0.03:
+       * particle share link: https://go.particle.io/shared_apps/5afd72bb04e419d0e3000f40
+       * adding cloud function setOnOff() to set this prj on or off
  *******************************************************************************/
 
 // Argentina time zone GMT-3
@@ -66,6 +70,7 @@ const int TIME_ZONE = -3;
 
 *******************************************************************************/
 State initState = State(initEnterFunction, initUpdateFunction, initExitFunction);
+State offState = State(offEnterFunction, offUpdateFunction, offExitFunction);
 State idleState = State(idleEnterFunction, idleUpdateFunction, idleExitFunction);
 State coolingState = State(coolingEnterFunction, coolingUpdateFunction, coolingExitFunction);
 State warmingState = State(warmingEnterFunction, warmingUpdateFunction, warmingExitFunction);
@@ -81,12 +86,14 @@ elapsedMillis quickLoopTimer;
 
 // FSM states constants
 #define STATE_INIT "Initializing"
+#define STATE_OFF "Off"
 #define STATE_IDLE "Idle"
 #define STATE_COOLING "Cooling"
 #define STATE_WARMING "Warming"
 #define STATE_FILLING "Filling"
 #define STATE_EMPTYING "Emptying"
 String state = STATE_INIT;
+String command = "";
 
 // timers work on millis, so we adjust the value with this constant
 #define MILLISECONDS_TO_MINUTES 60000
@@ -135,16 +142,15 @@ double temperatureCurrent3 = INVALID;
 /*******************************************************************************
  DHT sensor for ambient sensing
 *******************************************************************************/
-#define DHTTYPE  DHT22                // Sensor type DHT11/21/22/AM2301/AM2302
-#define DHTPIN   5                    // Digital pin for communications
-void dht_wrapper(); // must be declared before the lib initialization
+#define DHTTYPE DHT22 // Sensor type DHT11/21/22/AM2301/AM2302
+#define DHTPIN 5      // Digital pin for communications
+void dht_wrapper();   // must be declared before the lib initialization
 PietteTech_DHT DHT(DHTPIN, DHTTYPE, dht_wrapper);
-bool bDHTstarted;       // flag to indicate we started acquisition
+bool bDHTstarted; // flag to indicate we started acquisition
 double temperatureCurrent4 = INVALID;
 double humidityCurrent4 = INVALID;
 // This wrapper is in charge of calling the DHT sensor lib
 void dht_wrapper() { DHT.isrCallback(); }
-
 
 /*******************************************************************************
  relay variables
@@ -200,6 +206,7 @@ void setup()
   // Up to 15 cloud functions may be registered and each function name is limited to a maximum of 12 characters.
   Particle.function("setTarget", setTarget);
   Particle.function("setCalbrtion", setCalibration);
+  Particle.function("setOnOff", setOnOff);
 
   /*******************************************************************************
    cloud variables and functions for the ambient temperature
@@ -253,6 +260,10 @@ void quickLoop()
   // update the FSMs
   // the FSM is the heart of the program - all actions are defined by its states
   stateMachine.update();
+
+  // command takes in an asynchronous call from a particle cloud function
+  // the FSM addressed the command with the stateMachine.update() call, so we can flush it here
+  command = "";
 }
 
 /*******************************************************************************
@@ -262,6 +273,27 @@ void quickLoop()
 ********************************************************************************
 ********************************************************************************
 *******************************************************************************/
+
+/*******************************************************************************
+ * Function Name  : setOnOff
+ * Description    : this function sets the system on or off
+ * Parameters     : String parameter: on/ON/On or off/OFF/Off
+ * Return         : 0 if success, -1 if fails
+ *******************************************************************************/
+int setOnOff(String parameter)
+{
+
+  // validate percentage
+  if (!((parameter.equalsIgnoreCase("on")) or (parameter.equalsIgnoreCase("off"))))
+  {
+    Particle.publish(APP_NAME, "ERROR: Invalid command: " + parameter + ". Try on or off");
+    return -1;
+  }
+
+  command = parameter;
+
+  return 0;
+}
 
 /*******************************************************************************
  * Function Name  : setTarget
@@ -278,7 +310,7 @@ int setTarget(String parameter)
   if ((localValue >= 10) && (localValue <= 70))
   {
     temperatureTarget = localValue;
-    // Particle.publish(APP_NAME, "Setting temperature target to " + double2string(temperatureTarget), PRIVATE);
+    Particle.publish(APP_NAME, "Setting temperature target to " + double2string(temperatureTarget), PRIVATE);
     saveSettingsInEeprom();
     return 0;
   }
@@ -349,11 +381,7 @@ void readTemperature()
   getTempAmb();
   getTempAmbDHT();
 
-  Particle.publish(APP_NAME, "TAmb: " + double2string(temperatureCurrent3) \
-    + ", TAmbDHT: " + double2string(temperatureCurrent4) \
-    + ", HAmbDHT: " + double2string(humidityCurrent4) \
-    , PRIVATE);
-
+  Particle.publish(APP_NAME, "TAmb: " + double2string(temperatureCurrent3) + ", TAmbDHT: " + double2string(temperatureCurrent4) + ", HAmbDHT: " + double2string(humidityCurrent4), PRIVATE);
 }
 
 /*******************************************************************************
@@ -446,42 +474,44 @@ void getTempAmb()
  * Description    : reads the temperature of the DHT22 sensor
  * Return         : none
  *******************************************************************************/
-void getTempAmbDHT() {
+void getTempAmbDHT()
+{
 
   // start the sample
-  if (!bDHTstarted) {
+  if (!bDHTstarted)
+  {
     DHT.acquireAndWait(5);
     bDHTstarted = true;
   }
 
   //still acquiring sample? go away and come back later
-  if (DHT.acquiring()) {
+  if (DHT.acquiring())
+  {
     return;
   }
 
   //I observed my dht22 measuring below 0 from time to time, so let's discard that sample
-  if ( DHT.getCelsius() < 0 ) {
+  if (DHT.getCelsius() < 0)
+  {
     //reset the sample flag so we can take another
     bDHTstarted = false;
     return;
   }
 
-    if (useFahrenheit)
-    {
-      temperatureCurrent4 = DHT.getFahrenheit();
-    }
-    else
-    {
-      temperatureCurrent4 = DHT.getCelsius();
-    }
+  if (useFahrenheit)
+  {
+    temperatureCurrent4 = DHT.getFahrenheit();
+  }
+  else
+  {
+    temperatureCurrent4 = DHT.getCelsius();
+  }
 
   humidityCurrent4 = DHT.getHumidity();
 
   //reset the sample flag so we can take another
   bDHTstarted = false;
-
 }
-
 
 /*******************************************************************************
 ********************************************************************************
@@ -494,7 +524,7 @@ void getTempAmbDHT() {
 /*******************************************************************************
  * FSM state Name        : init 
  * Description           : when the system boots starts in this state to stabilize sensors.
-                            After some time (ten seconds), the system transitions to the idle state.
+                            After some time (ten seconds), the system transitions to the off state.
 *******************************************************************************/
 void initEnterFunction()
 {
@@ -509,9 +539,35 @@ void initUpdateFunction()
     return;
   }
 
-  stateMachine.transitionTo(idleState);
+  stateMachine.transitionTo(offState);
 }
 void initExitFunction()
+{
+}
+
+/*******************************************************************************
+ * FSM state Name        : off 
+ * Description           : the system does not do anything - it's OFF
+*******************************************************************************/
+void offEnterFunction()
+{
+  // set the new state and publish the change
+  setState(STATE_OFF);
+}
+void offUpdateFunction()
+{
+  // on command received?
+  if (command == "on")
+  {
+    stateMachine.transitionTo(idleState);
+  }
+  // off command received?
+  if (command == "off")
+  {
+    Particle.publish(APP_NAME, "The system is off already", PRIVATE);
+  }
+}
+void offExitFunction()
 {
 }
 
@@ -526,6 +582,17 @@ void idleEnterFunction()
 }
 void idleUpdateFunction()
 {
+  // off command received?
+  if (command == "off")
+  {
+    stateMachine.transitionTo(offState);
+  }
+  // on command received?
+  if (command == "on")
+  {
+    Particle.publish(APP_NAME, "The system is on already", PRIVATE);
+  }
+
   // is there too much water? empty a bit
   if (MAX_SENSOR == 1)
   {
@@ -566,6 +633,17 @@ void coolingEnterFunction()
 }
 void coolingUpdateFunction()
 {
+  // off command received?
+  if (command == "off")
+  {
+    stateMachine.transitionTo(offState);
+  }
+  // on command received?
+  if (command == "on")
+  {
+    Particle.publish(APP_NAME, "The system is on already", PRIVATE);
+  }
+
   // is it cool enough? go back to idle
   if (temperatureCurrent <= temperatureTarget)
   {
@@ -602,6 +680,17 @@ void warmingEnterFunction()
 }
 void warmingUpdateFunction()
 {
+  // off command received?
+  if (command == "off")
+  {
+    stateMachine.transitionTo(offState);
+  }
+  // on command received?
+  if (command == "on")
+  {
+    Particle.publish(APP_NAME, "The system is on already", PRIVATE);
+  }
+
   // is it warm enough? go back to idle
   if (temperatureCurrent >= temperatureTarget)
   {
@@ -640,6 +729,17 @@ void fillingEnterFunction()
 }
 void fillingUpdateFunction()
 {
+  // off command received?
+  if (command == "off")
+  {
+    stateMachine.transitionTo(offState);
+  }
+  // on command received?
+  if (command == "on")
+  {
+    Particle.publish(APP_NAME, "The system is on already", PRIVATE);
+  }
+
   // is there enough water? transition to idle
   if (MIN_SENSOR == 1)
   {
@@ -678,6 +778,17 @@ void emptyingEnterFunction()
 }
 void emptyingUpdateFunction()
 {
+  // off command received?
+  if (command == "off")
+  {
+    stateMachine.transitionTo(offState);
+  }
+  // on command received?
+  if (command == "on")
+  {
+    Particle.publish(APP_NAME, "The system is on already", PRIVATE);
+  }
+
   // is there enough water? transition to idle
   if (MAX_SENSOR == 0)
   {
